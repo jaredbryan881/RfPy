@@ -1032,9 +1032,11 @@ class RFData(object):
 
         # Deconvolve
         if phase == 'P' or 'PP':
+            self.wavelet=trL
             rfL, rfQ, rfT = _decon(trL, trQ, trT, trNl, trNq, trNt, nn, method)
 
         elif phase == 'S' or 'SKS':
+            self.wavelet=trQ
             rfQ, rfL, rfT = _decon(trQ, trL, trT, trNq, trNl, trNt, nn, method)
 
         # Update stats of streams
