@@ -777,7 +777,7 @@ class RFData(object):
 
             return left, right
 
-        def _decon(parent, daughter1, daughter2, noise_parent, noise_daughter1, nn, method):
+        def _decon(parent, daughter1, daughter2, noise_parent, noise_daughter1, noise_daughter2, nn, method):
 
             # Get length, zero padding parameters and frequencies
             dt = parent.stats.delta
@@ -795,6 +795,7 @@ class RFData(object):
                 Fd2 = np.fft.fft(daughter2.data, n=npad)
                 Fpn = np.fft.fft(noise_parent.data, n=npad)
                 Fd1n = np.fft.fft(noise_daughter1.data, n=npad)
+                Fd2n = np.fft.fft(noise_daughter2.data, n=npad)
 
                 # Auto and cross spectra
                 Spp = np.real(Fp*np.conjugate(Fp))
@@ -802,18 +803,25 @@ class RFData(object):
                 Sd2p = Fd2*np.conjugate(Fp)
                 Snpp = np.real(Fpn*np.conjugate(Fpn))
                 Snd1d1 = np.real(Fd1n*np.conjugate(Fd1n))
+                Snd2d2 = np.real(Fd2n*np.conjugate(Fd2n))
                 Snpd1 = np.abs(Fd1n*np.conjugate(Fpn))
+                Snpd2 = np.abs(Fd2n*np.conjugate(Fpn))
 
                 # Final processing depends on method
                 if method == 'wiener':
-                    Sdenom = Spp + Snpp
+                    Sdenom = [Spp + Snpp, Spp + Snpp, Spp + Snpp]
                 # Wiener ad-hoc deconvolution in Audet 2010 - BSSA
-                elif method == "wiener-mod":         
-                    Sdenom = Spp + 0.25*Snpp + 0.25*Snd1d1 + 0.5*Snpd1
+                elif method == "wiener-mod":
+                    Sdenom_p = Snpp
+                    Sdenom_d1 = (Snpp/4) + (Snd1d1/4) + (Snpd1/2)
+                    Sdenom_d2 = (Snpp/4) + (Snd1d1/4) + (Snpd2/2)
+                    Sdenom = [Spp + Sdenom_p, Spp + Sdenom_d1, Spp + Sdenom_d2]
                 elif method == 'water':
                     phi = np.amax(Spp)*wlevel
                     Sdenom = Spp
                     Sdenom[Sdenom < phi] = phi
+
+                    Sdenom=[Sdenom, Sdenom, Sdenom]
 
             # Multitaper deconvolution
             elif method == 'multitaper':
@@ -855,7 +863,7 @@ class RFData(object):
                 Snn = np.sum(np.real(Fn*np.conjugate(Fn)), axis=0)
 
                 # Denominator
-                Sdenom = Spp + Snn
+                Sdenom = [Spp + Snn, Spp + Snn, Spp + Snn]
 
             else:
                 print("Method not implemented")
@@ -881,11 +889,11 @@ class RFData(object):
 
             # Spectral division and inverse transform
             rfp.data = np.fft.ifftshift(np.real(np.fft.ifft(
-                gauss*Spp/Sdenom))/gnorm)
+                gauss*Spp/Sdenom[0]))/gnorm)
             rfd1.data = np.fft.ifftshift(np.real(np.fft.ifft(
-                gauss*Sd1p/Sdenom))/gnorm)
+                gauss*Sd1p/Sdenom[1]))/gnorm)
             rfd2.data = np.fft.ifftshift(np.real(np.fft.ifft(
-                gauss*Sd2p/Sdenom))/gnorm)
+                gauss*Sd2p/Sdenom[2]))/gnorm)
 
             return rfp, rfd1, rfd2
 
@@ -914,12 +922,14 @@ class RFData(object):
         trT = self.data.select(component=cT)[0].copy()
         trNl = self.data.select(component=cL)[0].copy()
         trNq = self.data.select(component=cQ)[0].copy()
+        trNt = self.data.select(component=cT)[0].copy()
 
         trL.stats.channel = 'WV' + self.meta.align[0]
         trQ.stats.channel = 'WV' + self.meta.align[1]
         trT.stats.channel = 'WV' + self.meta.align[2]
         trNl.stats.channel = 'WV' + self.meta.align[0]
         trNq.stats.channel = 'WV' + self.meta.align[1]
+        trNt.stats.channel = 'WV' + self.meta.align[2]
 
         if phase == 'P' or 'PP':
 
@@ -944,7 +954,7 @@ class RFData(object):
 
             # Trim noise traces
             [tr.trim(noise_left, noise_right, nearest_sample=False, 
-                pad=nn, fill_value=0.) for tr in [trNl, trNq]]
+                pad=nn, fill_value=0.) for tr in [trNl, trNq, trNt]]
 
             # dtsqt = len(trL.data)*trL.stats.delta/2.
             # nn = int(round((dtsqt-5.)*trL.stats.sampling_rate)) + 1
@@ -1002,17 +1012,19 @@ class RFData(object):
                       self.meta.time+self.meta.ttime-dts/2.)
             trNq.trim(self.meta.time+self.meta.ttime-dts,
                       self.meta.time+self.meta.ttime-dts/2.)
+            trNt.trim(self.meta.time+self.meta.ttime-dts,
+                      self.meta.time+self.meta.ttime-dts/2.)
 
         # Taper traces - only necessary processing after trimming
         # TODO: What does this to the multitaper method
         [tr.taper(max_percentage=0.05, max_length=2.)
-         for tr in [trL, trQ, trT, trNl, trNq]]
+         for tr in [trL, trQ, trT, trNl, trNq, trNt]]
 
         # Pre-filter waveforms before deconvolution
         if pre_filt:
             [tr.filter('bandpass', freqmin=pre_filt[0], freqmax=pre_filt[1],
                        corners=2, zerophase=True)
-             for tr in [trL, trQ, trT, trNl, trNq]]
+             for tr in [trL, trQ, trT, trNl, trNq, trNt]]
 
         # if writeto:
         #     with open(writeto, 'wb') as f:
@@ -1020,10 +1032,10 @@ class RFData(object):
 
         # Deconvolve
         if phase == 'P' or 'PP':
-            rfL, rfQ, rfT = _decon(trL, trQ, trT, trNl, trNq, nn, method)
+            rfL, rfQ, rfT = _decon(trL, trQ, trT, trNl, trNq, trNt, nn, method)
 
         elif phase == 'S' or 'SKS':
-            rfQ, rfL, rfT = _decon(trQ, trL, trT, trNq, trNl, nn, method)
+            rfQ, rfL, rfT = _decon(trQ, trL, trT, trNq, trNl, trNt, nn, method)
 
         # Update stats of streams
         rfL.stats.channel = 'RF' + self.meta.align[0]
