@@ -931,30 +931,43 @@ class RFData(object):
         trNq.stats.channel = 'WV' + self.meta.align[1]
         trNt.stats.channel = 'WV' + self.meta.align[2]
 
+        def _snap_trim(tr, t_left, nn, dt):
+            t_right = t_left + (nn - 1) * dt
+            tr.trim(t_left, t_right, nearest_sample=True, pad=True, fill_value=0.0)
+            # enforce nn samples exactly
+            n = tr.stats.npts
+            if n < nn:
+                tr.data = np.pad(tr.data, (0, nn - n), mode='constant')
+            elif n > nn:
+                tr.data = tr.data[:nn]
+            tr.stats.npts = nn
+
+        dt = float(trL.stats.delta)
+
         if phase == 'P' or 'PP':
 
             # Get signal length (i.e., seismogram to deconvolve) from
             # trace length
             # over = 5
-            dts = len(trL.data)*trL.stats.delta/2.
+            dts = len(trL.data) * dt / 2.
 
             # Traces will be zero-paded to this length (samples)
-            nn = int(round((dts - 5.)*trL.stats.sampling_rate)) + 1
-
-            sig_left = self.meta.time + self.meta.ttime - 5.
-            sig_right = self.meta.time + self.meta.ttime + dts - 10.
+            nn = int(round((dts - 5.) / dt)) + 1
 
             # Trim signal traces
-            [tr.trim(sig_left, sig_right, nearest_sample=False, 
-                pad=nn, fill_value=0.) for tr in [trL, trQ, trT]]
+            sig_left = self.meta.time + self.meta.ttime - 5.
+            for tr in (trL, trQ, trT):
+                _snap_trim(tr, sig_left, nn, dt)
 
             # Noise window (-dts to -5. sec)
-            noise_left = self.meta.time + self.meta.ttime - dts
-            noise_right = self.meta.time + self.meta.ttime - 5.
+            noise_right = sig_left - dt
+            noise_left = noise_right - (nn - 1) * dt
+            for tr in (trNl, trNq, trNt):
+                _snap_trim(tr, noise_left, nn, dt)
 
             # Trim noise traces
-            [tr.trim(noise_left, noise_right, nearest_sample=False, 
-                pad=nn, fill_value=0.) for tr in [trNl, trNq, trNt]]
+            #[tr.trim(noise_left, noise_right, nearest_sample=False, 
+            #    pad=nn, fill_value=0.) for tr in [trNl, trNq, trNt]]
 
             # dtsqt = len(trL.data)*trL.stats.delta/2.
             # nn = int(round((dtsqt-5.)*trL.stats.sampling_rate)) + 1
@@ -997,23 +1010,20 @@ class RFData(object):
 
             # Get signal length (i.e., seismogram to deconvolve) from
             # trace length
-            dts = len(trL.data)*trL.stats.delta/2.
+            dts = len(trL.data) * dt / 2.
 
             # Trim signal traces (-5. to dts-10 sec)
-            trL.trim(self.meta.time+self.meta.ttime+25.-dts/2.,
-                     self.meta.time+self.meta.ttime+25.)
-            trQ.trim(self.meta.time+self.meta.ttime+25.-dts/2.,
-                     self.meta.time+self.meta.ttime+25.)
-            trT.trim(self.meta.time+self.meta.ttime+25.-dts/2.,
-                     self.meta.time+self.meta.ttime+25.)
+            nn = int(round((dts / 2.) / dt)) + 1
+            sig_center = self.meta.time + self.meta.ttime + 25.
+            sig_left = sig_center - (nn - 1) * dt
+            for tr in (trL, trQ, trT):
+                _snap_trim(tr, sig_left, nn, dt)
 
-            # Trim noise traces (-dts to -5 sec)
-            trNl.trim(self.meta.time+self.meta.ttime-dts,
-                      self.meta.time+self.meta.ttime-dts/2.)
-            trNq.trim(self.meta.time+self.meta.ttime-dts,
-                      self.meta.time+self.meta.ttime-dts/2.)
-            trNt.trim(self.meta.time+self.meta.ttime-dts,
-                      self.meta.time+self.meta.ttime-dts/2.)
+            # Trim noise traces to (-dts to -5 sec)
+            noise_right = self.meta.time + self.meta.ttime - dt
+            noise_left = noise_right - (nn - 1) * dt
+            for tr in (trNl, trNq, trNt):
+                _snap_trim(tr, noise_left, nn, dt)
 
         # Taper traces - only necessary processing after trimming
         # TODO: What does this to the multitaper method
@@ -1032,11 +1042,11 @@ class RFData(object):
 
         # Deconvolve
         if phase == 'P' or 'PP':
-            self.wavelet=trL
+            self.wavelet=trL.copy()
             rfL, rfQ, rfT = _decon(trL, trQ, trT, trNl, trNq, trNt, nn, method)
 
         elif phase == 'S' or 'SKS':
-            self.wavelet=trQ
+            self.wavelet=trQ.copy()
             rfQ, rfL, rfT = _decon(trQ, trL, trT, trNq, trNl, trNt, nn, method)
 
         # Update stats of streams
